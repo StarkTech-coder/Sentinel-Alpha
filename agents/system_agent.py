@@ -54,8 +54,8 @@ class SystemAgent:
                 # Veriyi PUB portundan fırlat
                 self.socket.send_json(telemetry_data)
 
-                # Her 2 saniyede bir güncelle
-                time.sleep(2)
+                # Her 5 saniyede bir güncelle
+                time.sleep(5)
 
         except KeyboardInterrupt:
             print("[SYSTEM_AGENT] Kapatılıyor...")

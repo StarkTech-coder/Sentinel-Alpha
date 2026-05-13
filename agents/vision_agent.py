@@ -1,9 +1,9 @@
-# SENTINEL_ALPHA/agents/vision_agent.py
-
 import cv2
 import json
 import time
 import zmq
+import base64
+import numpy as np
 from ultralytics import YOLO
 from datetime import datetime
 
@@ -15,19 +15,27 @@ class VisionAgent:
         self.socket.bind(f"tcp://*:{port}")
 
         print(f"[VISION_AGENT] ANE Modeli Yükleniyor: {model_path}")
-
-        # Task'ı açıkça belirterek o uyarıyı da siliyoruz
         self.model = YOLO(model_path, task="detect")
 
-        # Hedef Etiketleri
-        self.target_labels = {0: "Person", 4: "Airplane", 8: "Boat"}
+        # CoreML'de model.names bazen geç yüklenir. Eğer None ise boş bir sözlük ata.
+        self.names = self.model.names if self.model.names else {}
+        self.hud_color = (0, 255, 0)
+
+    def draw_hud_corners(self, img, box, color=(0, 255, 0), thickness=2, length=20):
+        x1, y1, x2, y2 = map(int, box)
+        cv2.line(img, (x1, y1), (x1 + length, y1), color, thickness)
+        cv2.line(img, (x1, y1), (x1, y1 + length), color, thickness)
+        cv2.line(img, (x2, y1), (x2 - length, y1), color, thickness)
+        cv2.line(img, (x2, y1), (x2, y1 + length), color, thickness)
+        cv2.line(img, (x1, y2), (x1 + length, y2), color, thickness)
+        cv2.line(img, (x1, y2), (x1, y2 - length), color, thickness)
+        cv2.line(img, (x2, y2), (x2 - length, y2), color, thickness)
+        cv2.line(img, (x2, y2), (x2, y2 - length), color, thickness)
 
     def start_capture(self):
         cap = cv2.VideoCapture(0)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-        print("[VISION_AGENT] Gözlem ANE üzerinden aktif edildi.")
 
         try:
             while cap.isOpened():
@@ -35,43 +43,58 @@ class VisionAgent:
                 if not success:
                     break
 
-                # Inference
-                results = self.model(frame, stream=True, verbose=False)
+                results = self.model(frame, stream=True, verbose=False, device="mps")
+
+                detections = []
 
                 for r in results:
-                    # Ultralytics burada NMS'i kendi yapacak
+                    # Model isimleri hala None ise buradan tekrar kontrol et (CoreML için kritik)
+                    if not self.names and r.names:
+                        self.names = r.names
+
                     if r.boxes:
                         for box in r.boxes:
+                            conf = float(box.conf[0])
+                            if conf < 0.3:
+                                continue
+
                             cls_id = int(box.cls[0])
-                            if cls_id in self.target_labels:
-                                conf = float(box.conf[0])
-                                coords = box.xyxy[0].tolist()
+                            # Hata kontrolü: Eğer isim hala yoksa ID'yi kullan
+                            label = self.names.get(cls_id, f"obj_{cls_id}")
 
-                                telemetry = {
-                                    "timestamp": datetime.now().isoformat(),
-                                    "agent": "VisionAgent",
-                                    "event_type": "Detection",
-                                    "confidence": round(conf, 2),
-                                    "metadata": {
-                                        "target_id": f"TGT_{int(time.time())}",
-                                        "coordinates": [int(c) for c in coords],
-                                        "label": self.target_labels[cls_id],
-                                        "status": (
-                                            "Target Locked"
-                                            if conf > 0.7
-                                            else "Tracking"
-                                        ),
-                                    },
-                                }
-                                self.socket.send_json(telemetry)
+                            coords = box.xyxy[0].tolist()
 
-                time.sleep(0.001)
+                            self.draw_hud_corners(frame, coords, color=self.hud_color)
+                            cv2.putText(
+                                frame,
+                                f"{label.upper()} {conf:.2f}",
+                                (int(coords[0]), int(coords[1]) - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.4,
+                                self.hud_color,
+                                1,
+                            )
+
+                            detections.append({"label": label, "conf": round(conf, 2)})
+
+                _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                jpg_as_text = base64.b64encode(buffer).decode("utf-8")
+
+                telemetry = {
+                    "timestamp": datetime.now().isoformat(),
+                    "agent": "VisionAgent",
+                    "frame": jpg_as_text,
+                    "detections": detections,
+                    "metadata": {"status": "ACTIVE SCANNING" if detections else "IDLE"},
+                }
+                self.socket.send_json(telemetry)
+                time.sleep(0.04)
+
         except Exception as e:
-            print(f"[VISION_AGENT] Kritik Hata: {e}")
+            print(f"[VISION_AGENT] Çevrim içi hata: {e}")
         finally:
             cap.release()
             self.socket.close()
-            self.context.term()
 
 
 if __name__ == "__main__":
