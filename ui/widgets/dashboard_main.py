@@ -3,10 +3,8 @@ import os
 import json
 
 # --- KRİTİK PATH AYARI ---
-# Bu dosya ui/widgets altında olduğu için 3 seviye yukarı çıkarak SENTINEL_ALPHA klasörünü buluruz.
-# Böylece 'from ui.widgets...' ve 'from bridge...' importları her zaman çalışır.
-current_dir = os.path.dirname(os.path.abspath(__file__))  # ui/widgets
-project_root = os.path.dirname(os.path.dirname(current_dir))  # SENTINEL_ALPHA
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
@@ -14,12 +12,14 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QGridLayout, QWidget, QTe
 from PyQt6.QtCore import Qt
 from ui.widgets.vision_widget import VisionWidget
 from ui.widgets.health_widget import HealthWidget
+from ui.widgets.acoustic_widget import AcousticWidget  # YENİ EKLEME
 from bridge.ui_bridge import UIBridge
 
 
 class SentinelDashboard(QMainWindow):
     def __init__(self):
         super().__init__()
+
         # --- PENCERE AYARLARI ---
         self.setWindowTitle("SENTINEL ALPHA - PENTAGON HUD v2.0")
         self.resize(1400, 900)
@@ -33,28 +33,27 @@ class SentinelDashboard(QMainWindow):
         self.layout = QGridLayout(self.central_widget)
 
         # --- WIDGET ENTEGRASYONU ---
-        self.vision_view = VisionWidget()  # [1] MERKEZ: YOLO Canlı Akış
-        self.health_view = HealthWidget()  # [5] SOL ÜST: M2 Telemetri
-        self.target_data = QTextEdit()  # [4] SAĞ ÜST: Metadata (JSON Log)
-        self.brain_stream = QTextEdit()  # [3] SAĞ ALT: Ollama Karar Akışı
-        self.acoustic_view = QTextEdit()  # [2] SOL ALT: Akustik Sinyal Verisi
+        self.vision_view = VisionWidget()
+        self.health_view = HealthWidget()
+        self.target_data = QTextEdit()
+        self.brain_stream = QTextEdit()
+        self.acoustic_view = AcousticWidget()  # DÜZELTİLDİ: Özel widget kullanılıyor
 
         # --- STİL DÜZENLEMELERİ ---
         self._apply_styles()
 
-        # --- GRID YERLEŞİMİ (Pentagon Mantığı) ---
-        self.layout.addWidget(self.health_view, 0, 0)  # Sol Üst
-        self.layout.addWidget(self.acoustic_view, 1, 0)  # Sol Alt
-        self.layout.addWidget(self.vision_view, 0, 1, 2, 1)  # MERKEZ (Geniş Panel)
-        self.layout.addWidget(self.target_data, 0, 2)  # Sağ Üst
-        self.layout.addWidget(self.brain_stream, 1, 2)  # Sağ Alt
+        # --- GRID YERLEŞİMİ ---
+        self.layout.addWidget(self.health_view, 0, 0)
+        self.layout.addWidget(self.acoustic_view, 1, 0)
+        self.layout.addWidget(self.vision_view, 0, 1, 2, 1)
+        self.layout.addWidget(self.target_data, 0, 2)
+        self.layout.addWidget(self.brain_stream, 1, 2)
 
-        # Sütun oranlarını ayarla
         self.layout.setColumnStretch(0, 1)
         self.layout.setColumnStretch(1, 4)
         self.layout.setColumnStretch(2, 1)
 
-        # --- SİNYAL KÖPRÜSÜ (ZMQ CONNECTION) ---
+        # --- SİNYAL KÖPRÜSÜ ---
         self.setup_bridge()
 
     def _apply_styles(self):
@@ -65,7 +64,10 @@ class SentinelDashboard(QMainWindow):
             font-size: 11px; 
             color: #00f2ff;
         """
-        for w in [self.target_data, self.brain_stream, self.acoustic_view]:
+        for w in [
+            self.target_data,
+            self.brain_stream,
+        ]:  # acoustic_view zaten kendi içinde stillendi
             w.setReadOnly(True)
             w.setStyleSheet(text_style)
             w.setPlaceholderText("WAITING FOR DATA STREAM...")
@@ -74,12 +76,14 @@ class SentinelDashboard(QMainWindow):
         """UIBridge ile ZMQ kanallarını widget'lara bağlar."""
         self.bridge = UIBridge()
 
-        # Sinyalleri ilgili fonksiyonlara bağla
+        # Sinyalleri bağla
         self.bridge.vision_signal.connect(self.vision_view.update_frame)
         self.bridge.health_signal.connect(self.health_view.update_status)
         self.bridge.metadata_signal.connect(self.update_metadata_panel)
 
-        # Köprüyü ayrı bir thread olarak başlat
+        # DÜZELTİLDİ: Sinyal artık AcousticWidget'ın kendi fonksiyonuna gidiyor
+        self.bridge.acoustic_signal.connect(self.acoustic_view.update_waveform)
+
         self.bridge.start()
 
     def update_metadata_panel(self, data):
@@ -87,14 +91,11 @@ class SentinelDashboard(QMainWindow):
         try:
             formatted_data = json.dumps(data, indent=2)
             self.target_data.append(f"-> [INCOMING EVENT]:\n{formatted_data}\n")
-
-            # Otomatik aşağı kaydır
             scroll_bar = self.target_data.verticalScrollBar()
             scroll_bar.setValue(scroll_bar.maximum())
 
             if data.get("agent") == "BrainAgent":
                 self.brain_stream.append(f"> STRATEGY: {data.get('comment')}")
-
         except Exception as e:
             print(f"[HUD_ERROR] Metadata update failed: {e}")
 
