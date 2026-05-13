@@ -27,7 +27,9 @@ def start_sentinel():
     # 2. Arayüzü başlat (Yeni Pentagon Dashboard yolu)
     try:
         # Dashboard artık ui/widgets altında değil, direkt ui/ içinde
-        subprocess.run([sys.executable, os.path.join(base_dir, "ui/dashboard_main.py")])
+        subprocess.run(
+            [sys.executable, os.path.join(base_dir, "ui/widgets/dashboard_main.py")]
+        )
     except KeyboardInterrupt:
         print("\n[STOP] Sistem kapatılıyor...")
     finally:
