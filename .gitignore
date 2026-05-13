@@ -1,0 +1,9 @@
+# SENTINEL_ALPHA .gitignore
+venv/
+.venv/
+__pycache__/
+*.pyc
+ai_models/*.pt
+database/sentinel_memory/
+.DS_Store
+*.onnx

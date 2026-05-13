@@ -1,0 +1,8 @@
+# SENTINEL_ALPHA Core Dependencies
+PyQt6==6.6.1
+pyzmq==25.1.2
+ultralytics==8.1.0
+psutil==5.9.8
+chromadb==0.4.24
+opencv-python-headless==4.9.0.80
+numpy==1.26.4
