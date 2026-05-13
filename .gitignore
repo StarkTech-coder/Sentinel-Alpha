@@ -3,7 +3,9 @@ venv/
 .venv/
 __pycache__/
 *.pyc
-ai_models/*.pt
-database/sentinel_memory/
 .DS_Store
-*.onnx
+
+# AI Modellerini Kesinlikle Engelle
+ai_models/*.pt
+ai_models/*.mlpackage/
+ai_models/*/
