@@ -1,6 +1,7 @@
 import psutil
 import zmq
 import time
+import random
 from datetime import datetime
 
 
@@ -9,26 +10,34 @@ def run_system_agent():
     socket = context.socket(zmq.PUB)
     socket.bind("tcp://*:5557")
 
-    print("[SYSTEM_AGENT] M2 Telemetri Ajanı aktif. Port: 5557")
+    print("[SYSTEM_AGENT] M2 Telemetri Ajanı (CPU/GPU/ANE) aktif. Port: 5557")
 
     while True:
-        cpu = psutil.cpu_percent(interval=1)
-        ram = psutil.virtual_memory().percent
+        # Gerçek CPU verisi
+        cpu = psutil.cpu_percent(interval=None)
 
-        # --- KRİTİK NOKTA: İSİMLER UI_BRIDGE İLE AYNI OLMALI ---
+        # M2 GPU ve ANE simülasyonu (Gerçek değerler için powermetrics gerekir)
+        # VisionAgent aktifken GPU ve ANE yükünü simüle ediyoruz
+        gpu_sim = cpu * 0.8 if cpu > 20 else random.uniform(5, 15)
+        ane_sim = random.uniform(30, 60) if cpu > 50 else random.uniform(0, 5)
+
         payload = {
             "agent": "SystemAgent",
             "timestamp": datetime.now().isoformat(),
             "metadata": {
-                "cpu_load": cpu,  # 'cpu' değil 'cpu_load'
-                "ram_usage": ram,  # 'ram' değil 'ram_usage'
-                "status": "ACTIVE",
+                "cpu_load": cpu,
+                "gpu_load": gpu_sim,
+                "ane_load": ane_sim,
+                "status": "OPERATIONAL",
             },
         }
 
         socket.send_json(payload)
-        print(f"[{datetime.now().isoformat()}] [SYSTEM] CPU: {cpu}% | RAM: {ram}%")
-        time.sleep(0.5)  # Yarım saniyede bir güncelleme yeterli
+        # Terminalde temiz log gör
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] [SYSTEM] CPU: {cpu}% | GPU: {gpu_sim:.1f}% | ANE: {ane_sim:.1f}%"
+        )
+        time.sleep(0.5)
 
 
 if __name__ == "__main__":

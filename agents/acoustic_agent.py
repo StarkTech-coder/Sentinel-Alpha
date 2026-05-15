@@ -31,7 +31,8 @@ def run_acoustic_agent():
             audio_data = np.frombuffer(data, dtype=np.int16)
 
             # Ses şiddetini hesapla (RMS)
-            amplitude = np.sqrt(np.mean(audio_data**2))
+            mean_sq = np.mean(audio_data**2)
+            amplitude = np.sqrt(mean_sq) if mean_sq > 0 else 0
 
             # HUD için normalize et (0-100 arası)
             # 500-1000 arası genelde normal konuşma seviyesidir

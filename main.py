@@ -9,7 +9,6 @@ def start_sentinel():
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
     # 1. Ajanları ve Beyni başlat (Arka planda)
-    # Yeni Acoustic Agent eklendi
     vision = subprocess.Popen(
         [sys.executable, os.path.join(base_dir, "agents/vision_agent.py")]
     )
@@ -19,11 +18,15 @@ def start_sentinel():
     acoustic = subprocess.Popen(
         [sys.executable, os.path.join(base_dir, "agents/acoustic_agent.py")]
     )
+    # Zeka Ajanı (Ollama/Intelligence) entegre edildi
+    intelligence = subprocess.Popen(
+        [sys.executable, os.path.join(base_dir, "agents/intelligence_agent.py")]
+    )
     router = subprocess.Popen(
         [sys.executable, os.path.join(base_dir, "core/master_router.py")]
     )
 
-    print("[INFO] Ajanlar arkada çalışıyor. HUD açılıyor...")
+    print("[INFO] Ajanlar ve Zeka Modülü aktif. HUD açılıyor...")
     time.sleep(3)
 
     # 2. Arayüzü başlat
@@ -38,6 +41,7 @@ def start_sentinel():
         vision.terminate()
         system.terminate()
         acoustic.terminate()
+        intelligence.terminate()
         router.terminate()
         print("[CLEANUP] Tüm süreçler sonlandırıldı.")
 

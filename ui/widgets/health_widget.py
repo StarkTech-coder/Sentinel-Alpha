@@ -6,72 +6,92 @@ class HealthWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.layout = QVBoxLayout()
-        self.layout.setSpacing(10)  # Barlar arası boşluk
+        self.layout.setSpacing(8)
 
-        # --- Stil Tanımı ---
+        # --- SENTINEL YEŞİLİ HUD STİLİ (#00FF41) ---
         self.hud_style = """
             QProgressBar {
-                border: 1px solid #00f2ff;
-                border-radius: 2px;
+                border: 2px solid #00FF41;
+                border-radius: 0px;
                 text-align: center;
-                color: #00f2ff;
-                background-color: rgba(0, 242, 255, 0.05);
-                height: 15px;
+                color: #000;
+                background-color: rgba(0, 255, 65, 0.05);
+                height: 18px;
                 font-weight: bold;
+                font-family: 'Courier New';
             }
             QProgressBar::chunk {
-                background-color: #00f2ff;
+                background-color: #00FF41;
             }
             QLabel {
-                color: #00f2ff;
+                color: #00FF41;
                 font-family: 'Courier New';
-                font-size: 12px;
+                font-size: 11px;
+                font-weight: bold;
                 text-transform: uppercase;
             }
         """
 
-        # --- CPU Bölümü ---
-        self.cpu_label = QLabel("SYSTEM HEALTH: M2 CORE")
+        # --- CPU UNIT ---
+        self.cpu_label = QLabel("M2 CPU CORE [ACTIVE]")
         self.cpu_bar = QProgressBar()
-        self.cpu_bar.setRange(0, 100)
-        self.cpu_bar.setValue(0)
 
-        # --- RAM Bölümü ---
-        self.ram_label = QLabel("MEMORY ALLOCATION: LPDDR5")
-        self.ram_bar = QProgressBar()
-        self.ram_bar.setRange(0, 100)
-        self.ram_bar.setValue(0)
+        # --- GPU UNIT ---
+        self.gpu_label = QLabel("M2 GPU ENGINE [RENDERING]")
+        self.gpu_bar = QProgressBar()
+
+        # --- NEURAL ENGINE (ANE) UNIT ---
+        self.ane_label = QLabel("APPLE NEURAL ENGINE [AI INFERENCE]")
+        self.ane_bar = QProgressBar()
 
         # Stilleri Uygula
         self.setStyleSheet(self.hud_style)
 
-        # Layout'a Ekle
-        self.layout.addWidget(self.cpu_label)
-        self.layout.addWidget(self.cpu_bar)
-        self.layout.addSpacing(5)  # İki bar arası ekstra boşluk
-        self.layout.addWidget(self.ram_label)
-        self.layout.addWidget(self.ram_bar)
+        # Layout Yerleşimi
+        components = [
+            (self.cpu_label, self.cpu_bar),
+            (self.gpu_label, self.gpu_bar),
+            (self.ane_label, self.ane_bar),
+        ]
+
+        for label, bar in components:
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            self.layout.addWidget(label)
+            self.layout.addWidget(bar)
+            self.layout.addSpacing(5)
 
         self.setLayout(self.layout)
 
-    def update_status(self, cpu_val, ram_val):
+    def update_status(self, metrics):
         """
-        UIBridge'den gelen verileri barlara yansıtır.
+        UIBridge'den gelen sözlük verisini barlara yansıtır.
+        metrics: {'cpu': float, 'gpu': float, 'ane': float}
         """
-        # CPU Güncelleme
+        cpu_val = metrics.get("cpu", 0)
+        gpu_val = metrics.get("gpu", 0)
+        ane_val = metrics.get("ane", 0)
+
+        # Değerleri Güncelle
         self.cpu_bar.setValue(int(cpu_val))
         self.cpu_label.setText(f"M2 CPU LOAD: %{cpu_val:.1f}")
 
-        # RAM Güncelleme
-        self.ram_bar.setValue(int(ram_val))
-        self.ram_label.setText(f"RAM USAGE: %{ram_val:.1f}")
+        self.gpu_bar.setValue(int(gpu_val))
+        self.gpu_label.setText(f"M2 GPU LOAD: %{gpu_val:.1f}")
 
-        # Kritik Durum Renk Değişimi (Opsiyonel: %90 üzeri kırmızımsı efekt)
-        if cpu_val > 90:
-            self.cpu_bar.setStyleSheet(
-                "QProgressBar::chunk { background-color: #ff4444; }"
-            )
+        self.ane_bar.setValue(int(ane_val))
+        self.ane_label.setText(f"NEURAL ENGINE: %{ane_val:.1f}")
+
+        # Kritik Durum Uyarı Rengi (Opsiyonel: %95 üzeri turuncu efekt)
+        # Sentinel Yeşili'ni korumak için sadece aşırı yükte renk değiştirir
+        self._apply_dynamic_color(self.cpu_bar, cpu_val)
+        self._apply_dynamic_color(self.gpu_bar, gpu_val)
+        self._apply_dynamic_color(self.ane_bar, ane_val)
+
+    def _apply_dynamic_color(self, bar, value):
+        if value > 95:
+            bar.setStyleSheet(
+                "QProgressBar::chunk { background-color: #FFA500; }"
+            )  # Warning Orange
         else:
-            self.cpu_bar.setStyleSheet(
-                "QProgressBar::chunk { background-color: #00f2ff; }"
-            )
+            bar.setStyleSheet("QProgressBar::chunk { background-color: #00FF41; }")
