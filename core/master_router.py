@@ -3,60 +3,43 @@ import json
 
 
 class MasterRouter:
-    def __init__(self, vision_port=5555, system_port=5557):
+    def __init__(self, input_port=5555, output_port=5558):
         self.context = zmq.Context()
-        self.subscriber = self.context.socket(zmq.SUB)
 
-        # Ajan bağlantıları
-        self.subscriber.connect(f"tcp://localhost:{vision_port}")
-        self.subscriber.connect(f"tcp://localhost:{system_port}")
-        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
+        # 1. AJANLARDAN VERİ ALAN KAPI (PULL)
+        # Bütün ajanlar (Vision, System, Heat) buraya PUSH yapacak.
+        self.receiver = self.context.socket(zmq.PULL)
+        self.receiver.bind(f"tcp://*:{input_port}")
 
-        self.poller = zmq.Poller()
-        self.poller.register(self.subscriber, zmq.POLLIN)
+        # 2. UI VE DİĞERLERİNE VERİ DAĞITAN KAPI (PUB)
+        # Widgetlar buraya SUB (abone) olacak.
+        self.publisher = self.context.socket(zmq.PUB)
+        self.publisher.bind(f"tcp://*:{output_port}")
 
-        print("[MASTER_ROUTER] Merkezi sinir sistemi aktif. Ajanlar dinleniyor...")
+        print(f"[MASTER] Santral aktif. Giriş:{input_port} -> Çıkış:{output_port}")
 
-    def listen(self):
+    def start(self):
         try:
             while True:
-                socks = dict(self.poller.poll(1000))
-                if self.subscriber in socks:
-                    message = self.subscriber.recv_json()
+                # Veriyi ajanlardan al (Hiç içine bakmadan, ham paket olarak)
+                message = self.receiver.recv_json()
 
-                    agent_name = message.get("agent")
-                    timestamp = message.get("timestamp", "N/A")
-                    metadata = message.get("metadata", {})
+                # Veriyi olduğu gibi sisteme yay (Forward)
+                # Böylece VisionWidget da, HeatWidget da aynı anda duyabilir
+                self.publisher.send_json(message)
 
-                    if agent_name == "VisionAgent":
-                        # Listeden güvenli çekim
-                        detections = message.get("detections", [])
-                        if detections:
-                            for det in detections:
-                                label = det.get("label", "Unknown")
-                                conf = det.get("conf", 0.0)
-                                print(
-                                    f"[{timestamp}] [VISION] Tespit: {label} (%{conf*100})"
-                                )
-                        else:
-                            # Nesne yoksa durum bildir
-                            print(
-                                f"[{timestamp}] [VISION] Tarama aktif: {metadata.get('status', 'IDLE')}"
-                            )
-
-                    elif agent_name == "SystemAgent":
-                        # metadata içindeki yeni şemaya göre çekim (SystemAgent koduna göre)
-                        cpu = metadata.get("cpu_load", "0.0")
-                        ram = metadata.get("ram_usage", "0.0")
-                        print(f"[{timestamp}] [SYSTEM] CPU: {cpu}% | RAM: {ram}%")
+                # Sadece loglamak için (İstersen kapatabilirsin)
+                agent = message.get("agent", "Unknown")
+                print(f"[FORWARDING] {agent} verisi dağıtıldı.")
 
         except KeyboardInterrupt:
-            print("[MASTER_ROUTER] Kesme algılandı...")
+            print("[MASTER] Santral kapatılıyor...")
         finally:
-            self.subscriber.close()
+            self.receiver.close()
+            self.publisher.close()
             self.context.term()
 
 
 if __name__ == "__main__":
     router = MasterRouter()
-    router.listen()
+    router.start()

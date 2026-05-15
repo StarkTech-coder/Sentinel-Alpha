@@ -17,68 +17,78 @@ class UIBridge(QThread):
         super().__init__()
         self.context = zmq.Context()
         self.subscriber = self.context.socket(zmq.SUB)
-
-        # Port Bağlantıları
-        self.subscriber.connect("tcp://localhost:5555")  # Vision
-        self.subscriber.connect("tcp://localhost:5557")  # System
-        self.subscriber.connect("tcp://localhost:5558")  # Acoustic
-        self.subscriber.connect("tcp://localhost:5559")  # Intelligence (Ollama)
-
+        self.subscriber.connect("tcp://localhost:5558")
         self.subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
         self.running = True
 
     def run(self):
-        print("[UI_BRIDGE] Sentinel Sinyal Köprüsü Aktif...")
+        print("[UI_BRIDGE] Sentinel Sinyal Köprüsü Aktif (Port: 5558)")
+        poller = zmq.Poller()
+        poller.register(self.subscriber, zmq.POLLIN)
+
         while self.running:
             try:
-                message = self.subscriber.recv_json()
-                agent = message.get("agent")
+                socks = dict(poller.poll(100))
+                if self.subscriber in socks:
+                    message = self.subscriber.recv_json()
+                    agent = message.get("agent")
 
-                if agent == "VisionAgent":
-                    # Görüntü Çözme
-                    frame_data = base64.b64decode(message.get("frame"))
-                    np_data = np.frombuffer(frame_data, dtype=np.uint8)
-                    img = cv2.imdecode(np_data, cv2.IMREAD_COLOR)
-                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                    h, w, ch = img.shape
-
-                    qt_img = QImage(img.data, w, h, ch * w, QImage.Format.Format_RGB888)
-                    detections = message.get("detections", [])
-                    self.vision_signal.emit(qt_img, detections)
-
-                    # Sağ Panel Özeti
-                    summary_msg = {
-                        "agent": "VisionAgent",
-                        "detections_count": len(detections),
-                        "status": "STREAMING",
-                        "resolution": f"{w}x{h}",
-                    }
-                    self.metadata_signal.emit(summary_msg)
-
-                elif agent == "SystemAgent":
-                    metadata = message.get("metadata", {})
-                    metrics = {
-                        "cpu": float(metadata.get("cpu_load", 0)),
-                        "gpu": float(metadata.get("gpu_load", 0)),
-                        "ane": float(metadata.get("ane_load", 0)),
-                    }
-                    self.health_signal.emit(metrics)
-                    self.metadata_signal.emit(message)
-
-                elif agent == "AcousticAgent":
-                    level = float(message.get("level", 0))
-                    self.acoustic_signal.emit(level)
-                    self.metadata_signal.emit(message)
-
-                # Yeni IntelligenceAgent (Ollama) Bloğu - Etiket Güncellendi
-                elif agent == "IntelligenceAgent":
-                    analysis_text = message.get("analysis", "")
-                    self.metadata_signal.emit({"[SENTINEL_INTEL]": analysis_text})
-
+                    if agent == "VisionAgent":
+                        self._process_vision(message)
+                    elif agent == "SystemAgent":
+                        self._process_system(message)
+                    elif agent == "AcousticAgent":
+                        self._process_acoustic(message)
+                    elif agent == "IntelligenceAgent":
+                        analysis_text = message.get("analysis", "")
+                        self.metadata_signal.emit({"[SENTINEL_INTEL]": analysis_text})
             except Exception as e:
-                print(f"[UI_BRIDGE] Veri İşleme Hatası: {e}")
+                print(f"[UI_BRIDGE] Hata: {e}")
+
+    def _process_vision(self, message):
+        """DÜZELTİLDİ: Görüntü Agent'tan gelen veriyi çözer ve sinyale basar."""
+        try:
+            frame_data = message.get("frame")  # Agent 'frame' anahtarıyla gönderiyor
+            detections = message.get("detections", [])
+
+            if frame_data:
+                # Base64'ü doğrudan QImage'e çeviriyoruz (Daha hızlı)
+                img_bytes = base64.b64decode(frame_data)
+                qt_img = QImage.fromData(img_bytes)
+
+                # Widget'a gönder
+                self.vision_signal.emit(qt_img, detections)
+
+                # Sağ panel için bilgi gönder
+                self.metadata_signal.emit(
+                    {
+                        "agent": "VisionAgent",
+                        "status": "STREAMING",
+                        "objects": len(detections),
+                    }
+                )
+        except Exception as e:
+            print(f"[UI_BRIDGE] Vision İşleme Hatası: {e}")
+
+    def _process_system(self, message):
+        metadata = message.get("metadata", {})
+        metrics = {
+            "cpu": float(metadata.get("cpu_load", 0)),
+            "gpu": float(metadata.get("gpu_load", 0)),
+            "ane": float(metadata.get("ane_load", 0) or metadata.get("ram_usage", 0)),
+        }
+        self.health_signal.emit(metrics)
+        self.metadata_signal.emit(message)
+
+    def _process_acoustic(self, message):
+        level = float(
+            message.get("level") or message.get("metadata", {}).get("db_level", 0)
+        )
+        self.acoustic_signal.emit(level)
+        self.metadata_signal.emit(message)
 
     def stop(self):
         self.running = False
-        self.quit()
         self.wait()
+        self.subscriber.close()
+        self.context.term()

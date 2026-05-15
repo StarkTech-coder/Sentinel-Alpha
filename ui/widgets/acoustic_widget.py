@@ -1,16 +1,17 @@
+import zmq
+import json
+import random
 from PyQt6.QtWidgets import QTextEdit
 from PyQt6.QtCore import Qt, QTimer
-import random
 
 
 class AcousticWidget(QTextEdit):
     def __init__(self):
         super().__init__()
         self.setReadOnly(True)
-        # Karakter bazlı dalga geçmişi (Sentinel stili)
         self.wave_history = [" " for _ in range(30)]
 
-        # STARK/SENTINEL YEŞİLİ STİLİ (#00FF41)
+        # STARK/SENTINEL STİLİ
         self.setStyleSheet("""
             border: 2px solid #00FF41; 
             background: rgba(0, 255, 65, 0.05); 
@@ -19,29 +20,41 @@ class AcousticWidget(QTextEdit):
             color: #00FF41;
             font-weight: bold;
         """)
-        self.setPlaceholderText("WAITING FOR ACOUSTIC DATA...")
 
-        # Simülasyon için Timer (Gerçek veri gelmediğinde boş kalmasın)
-        self.sim_timer = QTimer()
-        self.sim_timer.timeout.connect(self.simulate_noise)
-        self.sim_timer.start(100)  # 100ms hızında güncelle
+        # ZMQ BAĞLANTISI (SUB - Abone Telsizi)
+        self.context = zmq.Context()
+        self.subscriber = self.context.socket(zmq.SUB)
+        # Master Router'ın ÇIKIŞ (Publisher) portuna bağlanıyoruz
+        self.subscriber.connect("tcp://localhost:5558")
+        # Boş string ("") her şeyi dinle demek, ama biz içerde ayıklayacağız
+        self.subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
 
-    def simulate_noise(self):
-        """Dron veya ortam sesi simülasyonu üretir."""
-        # %0 - %100 arası rastgele yoğunluk
-        fake_level = random.uniform(15.0, 45.0)
-        # Bazen 'drone' yakalamış gibi peak yapsın
-        if random.random() > 0.95:
-            fake_level = random.uniform(80.0, 98.5)
+        # Telsizi dinlemek için Timer (Arayüzü dondurmaz)
+        self.network_timer = QTimer()
+        self.network_timer.timeout.connect(self.check_network)
+        self.network_timer.start(10)  # 10ms'de bir telsize bak
 
-        self.update_waveform(fake_level)
+    def check_network(self):
+        """Telsizden yeni bir paket gelmiş mi diye bakar."""
+        try:
+            # NOBLOCK sayesinde veri yoksa beklemez, hemen geçer
+            message = self.subscriber.recv_json(flags=zmq.NOBLOCK)
+
+            # Sadece AcousticAgent'tan gelen verilerle ilgilen
+            if message.get("agent") == "AcousticAgent":
+                metadata = message.get("metadata", {})
+                # Ajanın gönderdiği ses seviyesini al (yoksa 0.0)
+                level = metadata.get("db_level", 0.0)
+                self.update_waveform(level)
+
+        except zmq.Again:
+            # Henüz yeni bir mesaj gelmediğinde buraya düşer, sorun yok.
+            pass
+        except Exception as e:
+            print(f"[ACOUSTIC_WIDGET] Hata: {e}")
 
     def update_waveform(self, level):
-        """
-        Gelen seviyeyi karakter dalgasına ve dB verisine dönüştürür.
-        level: 0.0 - 100.0 arası değer.
-        """
-        # Karakter seti (Düşükten yükseğe)
+        """Veriyi HUD formatında ekrana basar."""
         chars = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
         idx = int(min(level / 12.5, 8))
         current_char = chars[idx]
@@ -50,10 +63,8 @@ class AcousticWidget(QTextEdit):
         self.wave_history.append(current_char)
         wave_str = "".join(self.wave_history)
 
-        # Desibel hesaplama simülasyonu (Level'ı dB formatına çekiyoruz)
-        db_val = -(100 - level) / 2  # -50dB ile 0dB arası bir skala
+        db_val = -(100 - level) / 2
 
-        # HUD formatında metni bas
         self.setPlainText(
             f"--- ACOUSTIC MONITOR ---\n"
             f"REF: SIG-INTEL-ALPHA\n\n"
@@ -63,6 +74,8 @@ class AcousticWidget(QTextEdit):
             f"STATUS: {'[ ANALYZING ]' if level < 70 else '[ TARGET DETECTED ]'}"
         )
 
-    def stop_simulation(self):
-        """Gerçek AcousticAgent bağlandığında simülasyonu durdurmak için."""
-        self.sim_timer.stop()
+    def closeEvent(self, event):
+        """Widget kapandığında telsizi de kapat."""
+        self.subscriber.close()
+        self.context.term()
+        event.accept()

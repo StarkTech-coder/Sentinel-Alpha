@@ -2,73 +2,125 @@ import zmq
 import json
 import requests
 import time
+import os
 from datetime import datetime
 
 
 class IntelligenceAgent:
     def __init__(self):
         self.context = zmq.Context()
-        # Veri toplamak için SUB soketi
+
+        # 1. VERİ ALMA: Santralin ÇIKIŞ portundan (5558) abone oluyoruz
         self.subscriber = self.context.socket(zmq.SUB)
-        self.subscriber.connect("tcp://localhost:5555")  # Vision
-        self.subscriber.connect("tcp://localhost:5557")  # System
+        self.subscriber.connect("tcp://localhost:5558")
         self.subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
 
-        # Sonuçları Dashboard'a basmak için PUB soketi
-        self.publisher = self.context.socket(zmq.PUB)
-        self.publisher.bind("tcp://*:5559")
+        # 2. ANALİZ VE REFLEKS GÖNDERME: Santralin GİRİŞ portuna (5555) PUSH yapıyoruz
+        self.publisher = self.context.socket(zmq.PUSH)
+        self.publisher.connect("tcp://localhost:5555")
 
         self.ollama_url = "http://localhost:11434/api/generate"
-        self.current_data = {"vision": [], "system": {}}
+        self.memory = {"vision": [], "system": {}, "last_analysis": ""}
+
+    def execute_instant_reflex(self, detections):
+        """
+        KATMAN 1: OLLAMA ÖNCESİ HIZLI REFLEKS
+        Bu fonksiyon saliseler içinde çalışır.
+        """
+        critical_targets = [
+            "weapon",
+            "fire",
+            "knife",
+            "intruder",
+            "person",
+        ]  # Test için 'person' ekledim
+
+        for det in detections:
+            label = det.get("label", "").lower()
+            if label in critical_targets:
+                # ANLIK REFLEKS PAKETİ (Ollama'yı beklemeden fırlatıyoruz)
+                reflex_msg = {
+                    "agent": "IntelligenceAgent",
+                    "type": "REFLEX",
+                    "reflex_level": "CRITICAL",
+                    "target": label.upper(),
+                    "timestamp": datetime.now().strftime("%H:%M:%S.%f")[:-3],
+                }
+                self.publisher.send_json(reflex_msg)
+                print(f"[REFLEX] KRİTİK HEDEF TESPİT EDİLDİ: {label.upper()}!")
+
+                # İsteğe bağlı: Mac'e sesli uyarı verdir
+                # os.system(f'say "Alert! {label} detected." &')
+                return True
+        return False
 
     def get_ollama_analysis(self, prompt):
+        """KATMAN 2: STRATEJİK ANALİZ (DERİN DÜŞÜNCE)"""
         try:
             payload = {
-                "model": "llama3.1",  # M2'de en iyi bu çalışır
-                "prompt": prompt,
+                "model": "llama3.1",
+                "prompt": f"Sen bir savunma sanayii yapay zekasısın. Vereceğim verileri askeri tonda analiz et. Yanıtın kısa olsun. Veriler: {prompt}",
                 "stream": False,
             }
-            response = requests.post(self.ollama_url, json=payload)
-            return response.json().get("response", "Analiz başarısız.")
-        except:
-            return "Ollama bağlantısı kurulamadı."
+            response = requests.post(self.ollama_url, json=payload, timeout=10)
+            return response.json().get("response", "Analiz verisi alınamadı.")
+        except Exception as e:
+            return f"Ollama hatası: {str(e)}"
 
     def run(self):
-        print("[INTEL] Intelligence Agent aktif. Ollama dinleniyor...")
-        last_analysis_time = time.time()
+        print(
+            "[INTEL] Intelligence Agent (Refleks + Ollama) Aktif. Santral Dinleniyor..."
+        )
+        last_report_time = time.time()
 
         while True:
             try:
-                # Verileri topla
-                msg = self.subscriber.recv_json(flags=zmq.NOBLOCK)
-                if msg["agent"] == "VisionAgent":
-                    self.current_data["vision"] = msg.get("detections", [])
-                elif msg["agent"] == "SystemAgent":
-                    self.current_data["system"] = msg.get("metadata", {})
-            except zmq.Again:
-                pass
+                # Santralden gelen her şeyi dinle
+                while True:
+                    try:
+                        msg = self.subscriber.recv_json(flags=zmq.NOBLOCK)
+                        agent = msg.get("agent")
 
-            # Her 10 saniyede bir yorum yap (M2'yi yormamak için)
-            if time.time() - last_analysis_time > 10:
-                prompt = f"""
-                Sen SENTINEL AI sisteminin beynisin. Şu anki verileri analiz et:
-                Görülen Nesneler: {self.current_data['vision']}
-                Sistem Durumu: CPU %{self.current_data['system'].get('cpu_load')}, RAM %{self.current_data['system'].get('ram_usage')}
-                Kısa, askeri tarzda bir rapor ver.
-                """
-                analysis = self.get_ollama_analysis(prompt)
+                        if agent == "VisionAgent":
+                            detections = msg.get("detections", [])
+                            self.memory["vision"] = detections
 
-                # Sonucu UI'ya yolla
-                self.publisher.send_json(
-                    {
-                        "agent": "IntelligenceAgent",
-                        "analysis": analysis,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                )
-                last_analysis_time = time.time()
+                            # --- ⚡ REFLEKS KONTROLÜ (HER KAREDE) ---
+                            # Ollama'nın 15 saniyelik periyodunu beklemez!
+                            self.execute_instant_reflex(detections)
 
-            time.sleep(0.1)
+                        elif agent == "SystemAgent":
+                            self.memory["system"] = msg.get("metadata", {})
+
+                    except zmq.Again:
+                        break
+
+                # --- 🐢 STRATEJİK ANALİZ (15 SANIYEDE BIR) ---
+                if time.time() - last_report_time > 15:
+                    print("[INTEL] Stratejik rapor hazırlanıyor...")
+
+                    report_prompt = (
+                        f"Görülenler: {self.memory['vision']} | "
+                        f"Sistem Durumu: CPU %{self.memory['system'].get('cpu_load', 0)}"
+                    )
+
+                    analysis = self.get_ollama_analysis(report_prompt)
+
+                    self.publisher.send_json(
+                        {
+                            "agent": "IntelligenceAgent",
+                            "type": "STRATEGIC_REPORT",
+                            "analysis": analysis,
+                            "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        }
+                    )
+
+                    last_report_time = time.time()
+
+            except Exception as e:
+                print(f"[INTEL_ERROR] {e}")
+
+            time.sleep(0.01)  # Hız için sleep süresini düşürdük
 
 
 if __name__ == "__main__":

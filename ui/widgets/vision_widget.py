@@ -1,3 +1,8 @@
+import sys
+import json
+import base64
+import numpy as np
+import cv2
 from PyQt6.QtWidgets import QLabel
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
@@ -6,103 +11,104 @@ from PyQt6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
 class VisionWidget(QLabel):
     def __init__(self):
         super().__init__()
-        # Başlangıç metni ve stili
-        self.setText("SENTINEL VISION FEED\n[WAITING FOR STREAM]")
+        self.setText("SENTINEL VISION FEED\n[WAITING FOR DATA...]")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(640, 480)
 
-        # Dashboard temasına uygun Sentinel Yeşili stili
+        # Siber Stil
         self.setStyleSheet("""
             border: 2px solid #00FF41; 
             background-color: #000; 
             font-family: 'Courier New'; 
             color: #00FF41;
             font-weight: bold;
-            """)
+        """)
 
         self.latest_detections = []
-        self.original_image_size = (640, 480)
+        self.current_frame = None
 
     def update_frame(self, qt_img, detections):
-        """Bridge üzerinden gelen görüntüyü ve YOLO tespitlerini işler."""
-        self.latest_detections = detections
-        self.original_image_size = (qt_img.width(), qt_img.height())
+        """UIBridge'den gelen hazır QImage ve tespitleri alır."""
+        try:
+            self.current_frame = qt_img
+            self.latest_detections = detections
 
-        # Görüntüyü widget boyutuna ölçekle
-        pixmap = QPixmap.fromImage(qt_img).scaled(
-            self.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.setPixmap(pixmap)
+            # Görüntüyü ekrana sığdır ve bas
+            pixmap = QPixmap.fromImage(self.current_frame).scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self.setPixmap(pixmap)
 
-        # paintEvent'i tetikleyerek çizimleri günceller
-        self.update()
+            # Braketlerin çizilmesi için paintEvent'i tetikle
+            self.update()
+        except Exception as e:
+            print(f"[VISION_WIDGET_ERROR] Update hatası: {e}")
 
     def paintEvent(self, event):
-        """Görüntü üzerine HUD braketlerini ve YOLO köşe işaretlerini çizer."""
+        """Görüntü üzerine HUD braketlerini ve YOLO kutularını çizer."""
         super().paintEvent(event)
 
-        if not self.pixmap():
+        # Eğer görüntü yoksa çizim yapma
+        if not self.current_frame or self.pixmap() is None:
             return
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Sentinel Yeşili Ayarları
-        sentinel_green = QColor(0, 255, 65)
-        painter.setPen(QPen(sentinel_green, 2))
-        painter.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        # Sentinel Yeşili
+        green = QColor(0, 255, 65)
+        painter.setPen(QPen(green, 2))
+        painter.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
 
-        # 1. ANA HUD KÖŞE BRAKETLERİ (Sabit Vizör)
+        # 1. SABİT HUD KÖŞELERİ (Görsel efekt)
         w, h = self.width(), self.height()
-        m, l = 20, 40  # Margin ve Length
+        m, l = 20, 40  # Kenar boşluğu ve çizgi boyu
 
-        # Vizör köşeleri
+        # Sol Üst
         painter.drawLine(m, m, m + l, m)
-        painter.drawLine(m, m, m, m + l)  # Sol Üst
+        painter.drawLine(m, m, m, m + l)
+        # Sağ Üst
         painter.drawLine(w - m, m, w - m - l, m)
-        painter.drawLine(w - m, m, w - m, m + l)  # Sağ Üst
+        painter.drawLine(w - m, m, w - m, m + l)
+        # Sol Alt
         painter.drawLine(m, h - m, m + l, h - m)
-        painter.drawLine(m, h - m, m, h - m - l)  # Sol Alt
+        painter.drawLine(m, h - m, m, h - m - l)
+        # Sağ Alt
         painter.drawLine(w - m, h - m, w - m - l, h - m)
-        painter.drawLine(w - m, h - m, w - m, h - m - l)  # Sağ Alt
+        painter.drawLine(w - m, h - m, w - m, h - m - l)
 
-        # 2. YOLO TESPİT KÖŞE BRAKETLERİ
+        # 2. YOLO TESPİT BRAKETLERİ
         if self.latest_detections:
-            # Görüntü ölçeklendiği için koordinatları oranlıyoruz
-            scale_x = self.width() / self.original_image_size[0]
-            scale_y = self.height() / self.original_image_size[1]
+            # Görüntü ölçekleme (Pencere boyutu değiştikçe kutular kaymasın diye)
+            scale_x = self.width() / self.current_frame.width()
+            scale_y = self.height() / self.current_frame.height()
 
             for det in self.latest_detections:
                 coords = det.get("coordinates", [0, 0, 0, 0])
-                label = det.get("label", "Unknown").upper()
+                label = det.get("label", "TARGET").upper()
                 conf = det.get("conf", 0.0)
 
-                # Oranlanmış koordinatlar
-                x1 = int(coords[0] * scale_x)
-                y1 = int(coords[1] * scale_y)
-                x2 = int(coords[2] * scale_x)
-                y2 = int(coords[3] * scale_y)
+                # Koordinatları pencereye uyarla
+                x1, y1 = int(coords[0] * scale_x), int(coords[1] * scale_y)
+                x2, y2 = int(coords[2] * scale_x), int(coords[3] * scale_y)
 
-                # Dinamik braket uzunluğu
-                b_len = 15
+                b = 15  # Köşe braket boyu
 
-                # Nesne Köşe Çizimleri
-                # Sol Üst
-                painter.drawLine(x1, y1, x1 + b_len, y1)
-                painter.drawLine(x1, y1, x1, y1 + b_len)
-                # Sağ Üst
-                painter.drawLine(x2, y1, x2 - b_len, y1)
-                painter.drawLine(x2, y1, x2, y1 + b_len)
-                # Sol Alt
-                painter.drawLine(x1, y2, x1 + b_len, y2)
-                painter.drawLine(x1, y2, x1, y2 - b_len)
-                # Sağ Alt
-                painter.drawLine(x2, y2, x2 - b_len, y2)
-                painter.drawLine(x2, y2, x2, y2 - b_len)
+                # Nesne etrafına dinamik braketler
+                # Üst köşeler
+                painter.drawLine(x1, y1, x1 + b, y1)
+                painter.drawLine(x1, y1, x1, y1 + b)
+                painter.drawLine(x2, y1, x2 - b, y1)
+                painter.drawLine(x2, y1, x2, y1 + b)
+                # Alt köşeler
+                painter.drawLine(x1, y2, x1 + b, y2)
+                painter.drawLine(x1, y2, x1, y2 - b)
+                painter.drawLine(x2, y2, x2 - b, y2)
+                painter.drawLine(x2, y2, x2, y2 - b)
 
-                # Minimalist Etiket (Sadece Sol Üst Köşeye)
-                painter.drawText(x1 + 5, y1 - 5, f"> {label} {int(conf*100)}%")
+                # Bilgi metni
+                painter.drawText(x1 + 5, y1 - 5, f">> {label} {int(conf*100)}%")
 
         painter.end()

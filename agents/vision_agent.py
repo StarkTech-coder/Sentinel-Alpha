@@ -8,38 +8,44 @@ from ultralytics import YOLO
 
 
 def run_vision_agent():
-    # 1. ZMQ Kurulumu
+    # 1. ZMQ KURULUMU (Master Router'a Bağlantı)
     context = zmq.Context()
-    socket = context.socket(zmq.PUB)
-    socket.bind("tcp://*:5555")
+    # ARTIK PUSH: Veriyi merkeze fırlatıyoruz
+    socket = context.socket(zmq.PUSH)
+    socket.connect("tcp://localhost:5555")  # Master Router'ın giriş portu
 
-    # 2. YOLOv8 Model Yükleme (M2 GPU/MPS Hızlandırması)
+    # 2. YOLOv8 M2 GPU (MPS) YÜKLEME
     try:
         model = YOLO("ai_models/yolov8n.pt")
-        # MacBook Air M2'nin gücünü (MPS) kullanıyoruz
-        model.to("mps")
+        model.to("mps")  # Apple Silicon Gücü!
         print("[VISION] YOLOv8n M2 Neural Engine üzerinde aktif.")
     except Exception as e:
         print(f"[ERROR] Model yüklenemedi: {e}")
         return
 
-    # Mac için alternatif kamera indeksi (Gerekirse 0'ı 1 yap)
     cap = cv2.VideoCapture(0)
+
+    # Performans için kamera çözünürlüğünü sabitleyelim
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    print("[VISION] Yayın başlıyor... Çıkmak için CTRL+C")
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        # 3. Nesne Tespit (M2 MPS üzerinde inference)
+        # 3. NESNE TESPİT (Inference)
+        # MPS cihazında koşturuyoruz
         results = model(frame, device="mps", verbose=False)
+
         detections = []
         for r in results:
             for box in r.boxes:
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 conf = float(box.conf[0])
-                cls = int(box.cls[0])
-                label = model.names[cls]
+                label = model.names[int(box.cls[0])]
 
                 detections.append(
                     {
@@ -49,28 +55,32 @@ def run_vision_agent():
                     }
                 )
 
-        # 4. Görüntü İşleme (Base64)
-        # Boyutu biraz küçülterek (640x480 gibi) iletimi hızlandırabilirsin
+        # 4. GÖRÜNTÜYÜ SIKIŞTIR VE BASE64 YAP
+        # JPEG kalitesini 70 yaparak telsiz hattını (ZMQ) yormuyoruz
         _, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         frame_base64 = base64.b64encode(buffer).decode("utf-8")
 
-        # 5. UI_BRIDGE İLE TAM UYUMLU PAYLOAD
-        # DÜZELTME: 'telemetry' yerine anahtarları dışarı çıkardık
+        # 5. PAYLOAD (UI_BRIDGE VE SANTAL UYUMLU)
         message = {
             "agent": "VisionAgent",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
             "frame": frame_base64,
-            "detections": detections,  # UIBridge direkt bunu arıyor
+            "detections": detections,
             "status": "TARGET LOCKED" if detections else "SCANNING",
         }
 
-        # JSON olarak fırlat
-        socket.send_json(message)
+        # Veriyi Santrale Fırlat
+        try:
+            socket.send_json(message)
+        except Exception as e:
+            print(f"[VISION_ERROR] Gönderim hatası: {e}")
 
-        # M2 termal kısıtlamalarını korumak için küçük bir es
+        # M2 termal dengesi ve CPU kullanımı için minik bir mola
         time.sleep(0.01)
 
     cap.release()
+    socket.close()
+    context.term()
 
 
 if __name__ == "__main__":
